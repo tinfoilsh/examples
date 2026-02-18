@@ -254,7 +254,7 @@ async function sendMessage(): Promise<void> {
       },
       body: JSON.stringify({
         model: "gpt-oss-120b",
-        messages: [{ role: "user", content: text }],
+        messages: conversation,
         stream: true,
       }),
     });
