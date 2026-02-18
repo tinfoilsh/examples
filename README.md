@@ -4,7 +4,7 @@
 
 This example demonstrates **session recovery** for encrypted AI streaming responses. If a user closes their browser tab while a response is streaming, the proxy continues buffering the encrypted response. When the user reopens the page, the client retrieves and decrypts the buffered response.
 
-This builds on the basic encrypted proxy pattern shown in [encrypted-request-proxy-example](https://github.com/tinfoilsh/encrypted-request-proxy-example).
+This builds on the basic encrypted request proxy pattern shown in [encrypted-request-proxy-example](https://github.com/tinfoilsh/encrypted-request-proxy-example) and described in [our docs](https://docs.tinfoil.sh/guides/proxy-server). 
 
 ## Project Structure
 
@@ -19,7 +19,7 @@ This builds on the basic encrypted proxy pattern shown in [encrypted-request-pro
 
 ```bash
 # Terminal 1: Start the proxy
-export TINFOIL_API_KEY=tk_...
+export TINFOIL_API_KEY=<YOUR_API_KEY>
 cd server && go run main.go
 
 # Terminal 2: Start the TypeScript client
@@ -36,26 +36,26 @@ Open http://localhost:5173 and send a message.
 
 ## How It Works
 
-Streaming responses can take several seconds. If the user closes the tab mid-stream, the response is lost — the client can't decrypt partial data, and the enclave won't replay it.
-
-Session recovery solves this by having the proxy buffer a copy of the encrypted response:
+Streaming responses can take several seconds. If the user closes the tab mid-stream, the response is lost and the client cannot recover at a later point in time. Session recovery solves this by having the proxy buffer a copy of the encrypted response from the secure enclave. 
+The proxy does not decrypt the response, it simply stores the stream in a table and finishes serving it to the client 
+at a later point in time. If the client saved the session state (e.g., in sessionStorage) then it will be able to 
+request and recover the stream at any future point in time. 
 
 **Before streaming starts:**
 1. Client generates a random session ID and sends it via the `X-Session-Id` header
-2. Proxy creates an in-memory buffer for that session and tee-writes the encrypted response into it
-3. Client extracts a 64-byte recovery token (the HPKE exported secret + request enc) from the active encryption context and saves it to `localStorage` along with the session ID
+2. Proxy creates an buffer (in our case the buffer is in-memory but it can be a database) for that session and writes the encrypted response from the secure enclave into it.  
+3. The client extracts a 64-byte recovery token (the HPKE exported secret + request enc) from the active encryption context and saves it to `sessionStorage` along with the session ID. 
 
 **If the tab closes mid-stream:**
-4. The proxy detects the client disconnect but keeps the upstream enclave connection alive (using a background context) and continues buffering
-5. A resilient tee-writer ensures the session buffer keeps receiving data even after writes to the client fail
+The proxy detects the client disconnect but keeps the upstream enclave connection alive (using a background context) and continues buffering the response. 
 
 **When the user reopens the page:**
-6. Client finds the recovery token in `localStorage` and polls `GET /recovery/{id}/status`
-7. Once the proxy reports the session is `complete`, the client fetches the full buffered response from `GET /recovery/{id}`
-8. Client reconstructs the HPKE token from `localStorage` and calls `SecureClient.decryptRecoveryResponse()` to decrypt the buffered response
-9. The decrypted response is streamed through the same SSE parser and rendered in the chat UI
+4. The client finds the recovery token in `sessionStorage` and polls `GET /recovery/{id}/status`
+5. Once the proxy reports the session is `complete`, the client fetches the full buffered response from `GET /recovery/{id}`
+7. Client reconstructs the session token from `sessionStorage` and calls `SecureClient.decryptRecoveryResponse()` to decrypt the buffered response
+8. The decrypted response is streamed through the same SSE parser and rendered in the chat UI
 
-Sessions expire after 5 minutes if not claimed. The client sends `DELETE /recovery/{id}` after a successful normal completion to clean up early.
+The client sends `DELETE /recovery/{id}` after a successful normal completion to clean up the buffer.
 
 ## Endpoints
 
@@ -94,9 +94,9 @@ Client                    Proxy                     Tinfoil Enclave
   │                         │ Ehbp-Response-Nonce: <nonce> │
   │                         │ Body: <encrypted stream>     │
   │                         │                              │
-  │ (save recovery token    │ tee-write to client          │
-  │  to localStorage)       │ + session buffer             │
-  │<─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─│                              │
+  │ (save recovery token    │     Write to client          │
+  │  to sessionStorage)     │     + session buffer         │
+  │<─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ │                              │
   │                         │                              │
   │ (tab closes!)           │                              │
   │          X              │ client write fails,          │
