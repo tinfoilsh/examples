@@ -1,20 +1,18 @@
-# Encrypted Proxy with Session Recovery
+# Session Recovery Example
 
 [![Docs](https://img.shields.io/badge/docs-tinfoil.sh-blue)](https://docs.tinfoil.sh/guides/proxy-server)
 
-This example demonstrates two things:
+This example demonstrates **session recovery** for encrypted AI streaming responses. If a user closes their browser tab while a response is streaming, the proxy continues buffering the encrypted response. When the user reopens the page, the client retrieves and decrypts the buffered response.
 
-1. **Encrypted proxying** — Forwarding AI inference requests through your own server while preserving end-to-end encryption via [EHBP](https://github.com/tinfoilsh/encrypted-http-body-protocol). Your proxy can inspect headers and add authentication, but cannot read request or response bodies.
-
-2. **Session recovery** — If a user closes their browser tab while a streaming response is in flight, the proxy continues buffering the encrypted response. When the user reopens the page, the client retrieves and decrypts the buffered response from the proxy.
+This builds on the basic encrypted proxy pattern shown in [encrypted-request-proxy-example](https://github.com/tinfoilsh/encrypted-request-proxy-example).
 
 ## Project Structure
 
 ```
 ├── server/
-│   └── main.go              # Go proxy server
+│   └── main.go              # Go proxy server with session buffering
 └── clients/
-    └── typescript/          # Browser chat client
+    └── typescript/          # Browser chat client with recovery
 ```
 
 ## Quick Start
@@ -38,20 +36,6 @@ Open http://localhost:5173 and send a message.
 
 ## How It Works
 
-### Encrypted Proxying
-
-The browser client uses the [tinfoil](https://www.npmjs.com/package/tinfoil) SDK, which encrypts request bodies and decrypts response bodies using HPKE. The proxy sits between the client and the Tinfoil enclave:
-
-1. Client fetches and verifies the enclave's attestation bundle via the proxy (`GET /attestation`)
-2. Client encrypts the request body and sends it to the proxy with an `Ehbp-Encapsulated-Key` header
-3. Proxy forwards the encrypted request to the enclave URL (from the `X-Tinfoil-Enclave-Url` header), injecting the `TINFOIL_API_KEY` as the Bearer token
-4. Proxy streams the encrypted response back to the client, preserving the `Ehbp-Response-Nonce` header
-5. Client decrypts the response body locally
-
-The proxy handles routing and authentication but **cannot read the message content**.
-
-### Session Recovery
-
 Streaming responses can take several seconds. If the user closes the tab mid-stream, the response is lost — the client can't decrypt partial data, and the enclave won't replay it.
 
 Session recovery solves this by having the proxy buffer a copy of the encrypted response:
@@ -73,13 +57,13 @@ Session recovery solves this by having the proxy buffer a copy of the encrypted 
 
 Sessions expire after 5 minutes if not claimed. The client sends `DELETE /recovery/{id}` after a successful normal completion to clean up early.
 
-## Proxy Endpoints
+## Endpoints
 
 | Path | Method | Description |
 |------|--------|-------------|
+| `/v1/chat/completions` | POST | Forwards encrypted request to the enclave, buffers response if `X-Session-Id` is set |
+| `/v1/responses` | POST | Same as above |
 | `/attestation` | GET | Proxies attestation bundles from `https://atc.tinfoil.sh/attestation` |
-| `/v1/chat/completions` | POST | Forwards encrypted request to the enclave |
-| `/v1/responses` | POST | Forwards encrypted request to the enclave |
 | `/recovery/{id}/status` | GET | Returns `{"status": "not_found\|in_progress\|complete", "bytes": N}` |
 | `/recovery/{id}` | GET | Returns the buffered encrypted response (once complete) |
 | `/recovery/{id}` | DELETE | Removes the session buffer |
@@ -88,9 +72,9 @@ Sessions expire after 5 minutes if not claimed. The client sends `DELETE /recove
 
 | Direction | Header | Purpose |
 |-----------|--------|---------|
+| Request | `X-Session-Id` | Enables response buffering for recovery |
 | Request | `X-Tinfoil-Enclave-Url` | Enclave URL the client verified — used as upstream target |
 | Request | `Ehbp-Encapsulated-Key` | HPKE encapsulated key for the enclave to decrypt the request |
-| Request | `X-Session-Id` | Optional. Enables response buffering for recovery |
 | Response | `Ehbp-Response-Nonce` | Nonce for the client to decrypt the response |
 
 ## Request Flow
@@ -98,26 +82,13 @@ Sessions expire after 5 minutes if not claimed. The client sends `DELETE /recove
 ```
 Client                    Proxy                     Tinfoil Enclave
   │                         │                              │
-  │ GET /attestation        │                              │
-  │────────────────────────>│ GET /attestation             │
-  │                         │─────────────────────────────>│
-  │                         │<─────────────────────────────│
-  │<────────────────────────│ attestation bundle           │
-  │                         │                              │
-  │ (verify attestation,    │                              │
-  │  derive HPKE keys)      │                              │
-  │                         │                              │
   │ POST /v1/chat/completions                              │
   │ X-Session-Id: abc123    │                              │
-  │ Ehbp-Encapsulated-Key: <key>                           │
-  │ Body: <encrypted>       │                              │
   │────────────────────────>│                              │
   │                         │ create session buffer abc123 │
   │                         │                              │
   │                         │ POST /v1/chat/completions    │
   │                         │ Authorization: Bearer <key>  │
-  │                         │ Ehbp-Encapsulated-Key: <key> │
-  │                         │ Body: <encrypted>            │
   │                         │─────────────────────────────>│
   │                         │<─────────────────────────────│
   │                         │ Ehbp-Response-Nonce: <nonce> │
