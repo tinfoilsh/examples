@@ -38,21 +38,21 @@ Open http://localhost:5173 and send a message.
 
 Streaming responses can take several seconds. If the user closes the tab mid-stream, the response is lost and the client cannot recover at a later point in time. Session recovery solves this by having the proxy buffer a copy of the encrypted response from the secure enclave. 
 The proxy does not decrypt the response, it simply stores the stream in a table and finishes serving it to the client 
-at a later point in time. If the client saved the session state (e.g., in sessionStorage) then it will be able to 
+at a later point in time. If the client saved the session state (e.g., in localStorage) then it will be able to 
 request and recover the stream at any future point in time. 
 
 **Before streaming starts:**
 1. Client generates a random session ID and sends it via the `X-Session-Id` header
 2. Proxy creates an buffer (in our case the buffer is in-memory but it can be a database) for that session and writes the encrypted response from the secure enclave into it.  
-3. The client extracts a 64-byte recovery token (the HPKE exported secret + request enc) from the active encryption context and saves it to `sessionStorage` along with the session ID. 
+3. The client extracts a 64-byte recovery token (the HPKE exported secret + request enc) from the active encryption context and saves it to `localStorage` along with the session ID. 
 
 **If the tab closes mid-stream:**
 The proxy detects the client disconnect but keeps the upstream enclave connection alive (using a background context) and continues buffering the response. 
 
 **When the user reopens the page:**
-4. The client finds the recovery token in `sessionStorage` and polls `GET /recovery/{id}/status`
+4. The client finds the recovery token in `localStorage` and polls `GET /recovery/{id}/status`
 5. Once the proxy reports the session is `complete`, the client fetches the full buffered response from `GET /recovery/{id}`
-7. Client reconstructs the session token from `sessionStorage` and calls `SecureClient.decryptRecoveryResponse()` to decrypt the buffered response
+7. Client reconstructs the session token from `localStorage` and calls `SecureClient.decryptRecoveryResponse()` to decrypt the buffered response
 8. The decrypted response is streamed through the same SSE parser and rendered in the chat UI
 
 The client sends `DELETE /recovery/{id}` after a successful normal completion to clean up the buffer.
@@ -95,7 +95,7 @@ Client                    Proxy                     Tinfoil Enclave
   │                         │ Body: <encrypted stream>     │
   │                         │                              │
   │ (save recovery token    │     Write to client          │
-  │  to sessionStorage)     │     + session buffer         │
+  │  to localStorage)     │     + session buffer         │
   │<─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ │                              │
   │                         │                              │
   │ (tab closes!)           │                              │

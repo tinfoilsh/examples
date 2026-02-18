@@ -4,7 +4,7 @@ import type { SessionRecoveryToken } from "tinfoil";
 type Role = "user" | "assistant";
 
 // ---------------------------------------------------------------------------
-// Session recovery: sessionStorage persistence
+// Session recovery: localStorage persistence
 // ---------------------------------------------------------------------------
 
 const PROXY_ORIGIN = "http://localhost:8080";
@@ -33,11 +33,11 @@ function saveRecovery(
     requestEnc: Array.from(token.requestEnc),
     userMessage,
   };
-  sessionStorage.setItem(RECOVERY_STORAGE_KEY, JSON.stringify(data));
+  localStorage.setItem(RECOVERY_STORAGE_KEY, JSON.stringify(data));
 }
 
 function loadRecovery(): StoredRecovery | null {
-  const raw = sessionStorage.getItem(RECOVERY_STORAGE_KEY);
+  const raw = localStorage.getItem(RECOVERY_STORAGE_KEY);
   if (!raw) return null;
   try {
     return JSON.parse(raw) as StoredRecovery;
@@ -47,7 +47,7 @@ function loadRecovery(): StoredRecovery | null {
 }
 
 function clearRecovery(): void {
-  sessionStorage.removeItem(RECOVERY_STORAGE_KEY);
+  localStorage.removeItem(RECOVERY_STORAGE_KEY);
 }
 
 // ---------------------------------------------------------------------------
