@@ -27,11 +27,29 @@ body {
 .header {
     padding: 20px;
     border-bottom: 1px solid #eee;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
 }
 
 .header h1 {
     font-size: 20px;
     color: #333;
+}
+
+#clearBtn {
+    padding: 6px 14px;
+    background: none;
+    color: #d32f2f;
+    border: 1px solid #d32f2f;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 12px;
+}
+
+#clearBtn:hover {
+    background: #d32f2f;
+    color: white;
 }
 
 .messages {

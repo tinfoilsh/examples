@@ -9,6 +9,35 @@ type Role = "user" | "assistant";
 
 const PROXY_ORIGIN = "http://localhost:8080";
 const RECOVERY_STORAGE_KEY = "tinfoil_recovery";
+const CONVERSATION_STORAGE_KEY = "tinfoil_conversation";
+
+interface ChatMessage {
+  role: Role;
+  content: string;
+}
+
+let conversation: ChatMessage[] = [];
+
+function saveConversation(): void {
+  localStorage.setItem(CONVERSATION_STORAGE_KEY, JSON.stringify(conversation));
+}
+
+function loadConversation(): ChatMessage[] {
+  const raw = localStorage.getItem(CONVERSATION_STORAGE_KEY);
+  if (!raw) return [];
+  try {
+    return JSON.parse(raw) as ChatMessage[];
+  } catch {
+    return [];
+  }
+}
+
+function clearAll(): void {
+  localStorage.removeItem(CONVERSATION_STORAGE_KEY);
+  localStorage.removeItem(RECOVERY_STORAGE_KEY);
+  conversation = [];
+  messages.innerHTML = "";
+}
 
 interface StoredRecovery {
   sessionId: string;
@@ -79,6 +108,7 @@ function showToast(text: string): void {
 const messages = requireElement<HTMLDivElement>("#messages");
 const input = requireElement<HTMLInputElement>("#messageInput");
 const sendButton = requireElement<HTMLButtonElement>("#sendBtn");
+const clearButton = requireElement<HTMLButtonElement>("#clearBtn");
 
 const client = new SecureClient({
   baseURL: "http://localhost:8080/",
@@ -196,6 +226,7 @@ async function sendMessage(): Promise<void> {
   }
 
   input.value = "";
+  conversation.push({ role: "user", content: text });
   appendMessage(text, "user");
   sendButton.disabled = true;
 
@@ -247,21 +278,24 @@ async function sendMessage(): Promise<void> {
     const assistantBubble = appendMessage("", "assistant");
     const contentType = response.headers.get("Content-Type") ?? "";
 
+    let assistantText = "";
+
     if (contentType.includes("text/event-stream")) {
       await streamResponse(response, (chunk) => {
-        assistantBubble.textContent += chunk;
+        assistantText += chunk;
+        assistantBubble.textContent = assistantText;
         messages.scrollTop = messages.scrollHeight;
       });
-      // Stream completed — clean up recovery data and proxy buffer
-      clearRecovery();
-      fetch(`${PROXY_ORIGIN}/recovery/${sessionId}`, { method: "DELETE" }).catch(() => {});
-      return;
+    } else {
+      const json = await response.json();
+      assistantText = json.choices?.[0]?.message?.content ?? "No content";
+      assistantBubble.textContent = assistantText;
     }
 
-    const json = await response.json();
-    assistantBubble.textContent =
-      json.choices?.[0]?.message?.content ?? "No content";
+    conversation.push({ role: "assistant", content: assistantText });
+    saveConversation();
     clearRecovery();
+    fetch(`${PROXY_ORIGIN}/recovery/${sessionId}`, { method: "DELETE" }).catch(() => {});
   } catch (error) {
     console.error("Chat request failed", error);
     const message =
@@ -274,6 +308,7 @@ async function sendMessage(): Promise<void> {
 }
 
 sendButton.addEventListener("click", () => void sendMessage());
+clearButton.addEventListener("click", clearAll);
 input.addEventListener("keydown", (event) => {
   if (event.key === "Enter" && !event.isComposing) {
     event.preventDefault();
@@ -282,8 +317,13 @@ input.addEventListener("keydown", (event) => {
 });
 
 // ---------------------------------------------------------------------------
-// Attempt session recovery on page load
+// Restore conversation and attempt session recovery on page load
 // ---------------------------------------------------------------------------
+
+conversation = loadConversation();
+for (const msg of conversation) {
+  appendMessage(msg.content, msg.role);
+}
 
 async function attemptRecovery(): Promise<void> {
   const stored = loadRecovery();
@@ -292,22 +332,9 @@ async function attemptRecovery(): Promise<void> {
   const { sessionId, exportedSecret, requestEnc, userMessage } = stored;
 
   try {
-    const statusResp = await fetch(
-      `${PROXY_ORIGIN}/recovery/${sessionId}/status`,
-    );
-    const statusBody = await statusResp.json();
-
-    if (statusBody.status === "not_found") {
-      clearRecovery();
-      return;
-    }
-
-    if (statusBody.status === "in_progress") {
-      await new Promise((r) => setTimeout(r, 2000));
-      return attemptRecovery();
-    }
-
-    // status === "complete" — fetch and decrypt the buffered response
+    // Fetch the buffered response directly — the proxy streams bytes as
+    // they arrive, so this works whether the upstream is still in progress
+    // or already complete.
     const recoveryResp = await fetch(
       `${PROXY_ORIGIN}/recovery/${sessionId}`,
     );
@@ -326,26 +353,31 @@ async function attemptRecovery(): Promise<void> {
       token,
     );
 
+    conversation.push({ role: "user", content: userMessage });
     appendMessage(userMessage, "user");
     const assistantBubble = appendMessage("", "assistant");
     const contentType = decrypted.headers.get("Content-Type") ?? "";
+    let assistantText = "";
 
     if (contentType.includes("text/event-stream")) {
       await streamResponse(decrypted, (chunk) => {
-        assistantBubble.textContent += chunk;
+        assistantText += chunk;
+        assistantBubble.textContent = assistantText;
         messages.scrollTop = messages.scrollHeight;
       });
     } else {
       const json = await decrypted.json();
-      assistantBubble.textContent =
-        json.choices?.[0]?.message?.content ?? "No content";
+      assistantText = json.choices?.[0]?.message?.content ?? "No content";
+      assistantBubble.textContent = assistantText;
     }
 
+    conversation.push({ role: "assistant", content: assistantText });
+    saveConversation();
     showToast("Recovered from previous session");
+    clearRecovery();
+    fetch(`${PROXY_ORIGIN}/recovery/${sessionId}`, { method: "DELETE" }).catch(() => {});
   } catch (err) {
     console.warn("Session recovery failed:", err);
-  } finally {
-    clearRecovery();
   }
 }
 

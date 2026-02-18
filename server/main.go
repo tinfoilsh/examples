@@ -30,10 +30,11 @@ const (
 // session holds a buffered copy of an encrypted streaming response.
 type session struct {
 	mu         sync.Mutex
+	cond       *sync.Cond
 	statusCode int
 	headers    http.Header
 	buf        bytes.Buffer
-	done bool
+	done       bool
 }
 
 type sessionStore struct {
@@ -47,6 +48,7 @@ func (s *sessionStore) create(id string) *session {
 	sess := &session{
 		headers: make(http.Header),
 	}
+	sess.cond = sync.NewCond(&sess.mu)
 	s.mu.Lock()
 	s.sessions[id] = sess
 	s.mu.Unlock()
@@ -88,8 +90,10 @@ type sessionWriter struct{ sess *session }
 
 func (sw *sessionWriter) Write(p []byte) (int, error) {
 	sw.sess.mu.Lock()
-	defer sw.sess.mu.Unlock()
-	return sw.sess.buf.Write(p)
+	n, err := sw.sess.buf.Write(p)
+	sw.sess.cond.Broadcast()
+	sw.sess.mu.Unlock()
+	return n, err
 }
 
 // ---------------------------------------------------------------------------
@@ -198,6 +202,7 @@ func proxyHandler(w http.ResponseWriter, r *http.Request) {
 	if sess != nil {
 		sess.mu.Lock()
 		sess.done = true
+		sess.cond.Broadcast()
 		sess.mu.Unlock()
 	}
 }
@@ -273,11 +278,12 @@ func recoveryFetch(w http.ResponseWriter, id string) {
 		return
 	}
 
+	flusher, canFlush := w.(http.Flusher)
+
+	// Write response headers (wait until we have them).
 	sess.mu.Lock()
-	if !sess.done {
-		sess.mu.Unlock()
-		http.Error(w, "session still in progress", http.StatusConflict)
-		return
+	for sess.statusCode == 0 && !sess.done {
+		sess.cond.Wait()
 	}
 	for key, vals := range sess.headers {
 		for _, v := range vals {
@@ -285,10 +291,33 @@ func recoveryFetch(w http.ResponseWriter, id string) {
 		}
 	}
 	w.WriteHeader(sess.statusCode)
-	w.Write(sess.buf.Bytes())
 	sess.mu.Unlock()
 
-	store.remove(id)
+	// Stream buffered bytes, waiting for new data as it arrives.
+	offset := 0
+	for {
+		sess.mu.Lock()
+		for sess.buf.Len() == offset && !sess.done {
+			sess.cond.Wait()
+		}
+		data := sess.buf.Bytes()[offset:]
+		done := sess.done
+		sess.mu.Unlock()
+
+		if len(data) > 0 {
+			if _, err := w.Write(data); err != nil {
+				return
+			}
+			offset += len(data)
+			if canFlush {
+				flusher.Flush()
+			}
+		}
+
+		if done {
+			return
+		}
+	}
 }
 
 // ---------------------------------------------------------------------------
