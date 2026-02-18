@@ -14,7 +14,10 @@ import (
 
 const (
 	enclaveURLHeader   = "X-Tinfoil-Enclave-Url"
-	sessionIDHeader    = "X-Session-Id"
+	// sessionIDHeader is an application-level convention used by this proxy
+	// for stream recovery. Tinfoil does not dictate how sessions are identified;
+	// the header name and mechanism are entirely up to the application.
+	sessionIDHeader = "X-Session-Id"
 	responseNonceHdr   = "Ehbp-Response-Nonce"
 	encapsulatedKeyHdr = "Ehbp-Encapsulated-Key"
 
