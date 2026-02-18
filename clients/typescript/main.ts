@@ -224,6 +224,14 @@ async function sendMessage(): Promise<void> {
   }
 
   input.value = "";
+
+  // Clean up any previous recovery session now that the user is sending a new message
+  const previousRecovery = loadRecovery();
+  if (previousRecovery) {
+    fetch(`${PROXY_ORIGIN}/recovery/${previousRecovery.sessionId}`, { method: "DELETE" }).catch(() => {});
+    clearRecovery();
+  }
+
   conversation.push({ role: "user", content: text });
   appendMessage(text, "user");
   sendButton.disabled = true;
@@ -381,12 +389,9 @@ async function attemptRecovery(): Promise<void> {
 
     conversation.push({ role: "assistant", content: assistantText });
     saveConversation();
-    clearRecovery();
-    fetch(`${PROXY_ORIGIN}/recovery/${sessionId}`, { method: "DELETE" }).catch(() => {});
   } catch (err) {
     console.warn("Session recovery failed:", err);
     setStatus(`recovery failed: ${sessionId}`, "");
-    clearRecovery();
   }
 }
 
