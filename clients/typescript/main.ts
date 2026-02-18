@@ -361,8 +361,13 @@ async function attemptRecovery(): Promise<void> {
     const contentType = decrypted.headers.get("Content-Type") ?? "";
     let assistantText = "";
 
+    let firstChunk = true;
     if (contentType.includes("text/event-stream")) {
       await streamResponse(decrypted, (chunk) => {
+        if (firstChunk) {
+          setStatus(`recovered session: ${sessionId}`, "recovered");
+          firstChunk = false;
+        }
         assistantText += chunk;
         assistantBubble.textContent = assistantText;
         messages.scrollTop = messages.scrollHeight;
@@ -371,11 +376,11 @@ async function attemptRecovery(): Promise<void> {
       const json = await decrypted.json();
       assistantText = json.choices?.[0]?.message?.content ?? "No content";
       assistantBubble.textContent = assistantText;
+      setStatus(`recovered session: ${sessionId}`, "recovered");
     }
 
     conversation.push({ role: "assistant", content: assistantText });
     saveConversation();
-    setStatus(`recovered session: ${sessionId}`, "recovered");
     clearRecovery();
     fetch(`${PROXY_ORIGIN}/recovery/${sessionId}`, { method: "DELETE" }).catch(() => {});
   } catch (err) {
