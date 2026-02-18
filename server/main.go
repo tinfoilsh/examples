@@ -67,15 +67,15 @@ func (s *sessionStore) remove(id string) {
 	s.mu.Unlock()
 }
 
-// resilientTeeWriter writes to both primary and fallible. If fallible
+// forkWriter writes to both primary and fallible. If fallible
 // errors (e.g. client disconnected), it is abandoned and writes continue
 // to primary only. Primary errors are fatal.
-type resilientTeeWriter struct {
+type forkWriter struct {
 	primary  io.Writer
 	fallible io.Writer
 }
 
-func (rw *resilientTeeWriter) Write(p []byte) (int, error) {
+func (rw *forkWriter) Write(p []byte) (int, error) {
 	if rw.fallible != nil {
 		if _, err := rw.fallible.Write(p); err != nil {
 			log.Printf("client disconnected, continuing to buffer session")
@@ -190,7 +190,7 @@ func proxyHandler(w http.ResponseWriter, r *http.Request) {
 		dst = &flushWriter{ResponseWriter: w, Flusher: flusher}
 	}
 	if sess != nil {
-		dst = &resilientTeeWriter{
+		dst = &forkWriter{
 			primary:  &sessionWriter{sess: sess},
 			fallible: dst,
 		}
