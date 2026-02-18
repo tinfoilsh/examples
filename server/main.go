@@ -172,6 +172,7 @@ func proxyHandler(w http.ResponseWriter, r *http.Request) {
 	// If the client sent a session ID, tee-write into a recovery buffer
 	var sess *session
 	if sessionID != "" {
+		log.Printf("[session %s] created, buffering %s", sessionID, r.URL.Path)
 		sess = store.create(sessionID)
 		sess.mu.Lock()
 		sess.statusCode = resp.StatusCode
@@ -201,6 +202,7 @@ func proxyHandler(w http.ResponseWriter, r *http.Request) {
 
 	if sess != nil {
 		sess.mu.Lock()
+		log.Printf("[session %s] stream complete, %d bytes buffered", sessionID, sess.buf.Len())
 		sess.done = true
 		sess.cond.Broadcast()
 		sess.mu.Unlock()
@@ -240,6 +242,7 @@ func recoveryRouter(w http.ResponseWriter, r *http.Request) {
 			recoveryFetch(w, sessionID)
 		}
 	case http.MethodDelete:
+		log.Printf("[session %s] deleted", sessionID)
 		store.remove(sessionID)
 		w.WriteHeader(http.StatusNoContent)
 	default:
@@ -274,10 +277,12 @@ func recoveryStatus(w http.ResponseWriter, id string) {
 func recoveryFetch(w http.ResponseWriter, id string) {
 	sess := store.get(id)
 	if sess == nil {
+		log.Printf("[session %s] recovery requested, not found", id)
 		http.Error(w, "session not found", http.StatusNotFound)
 		return
 	}
 
+	log.Printf("[session %s] recovery requested, streaming buffered response", id)
 	flusher, canFlush := w.(http.Flusher)
 
 	// Write response headers (wait until we have them).
@@ -306,6 +311,7 @@ func recoveryFetch(w http.ResponseWriter, id string) {
 
 		if len(data) > 0 {
 			if _, err := w.Write(data); err != nil {
+				log.Printf("[session %s] recovery client disconnected at %d bytes", id, offset)
 				return
 			}
 			offset += len(data)
@@ -315,6 +321,7 @@ func recoveryFetch(w http.ResponseWriter, id string) {
 		}
 
 		if done {
+			log.Printf("[session %s] recovery complete, sent %d bytes", id, offset)
 			return
 		}
 	}

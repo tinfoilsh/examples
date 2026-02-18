@@ -52,6 +52,52 @@ body {
     color: white;
 }
 
+.status-bar {
+    padding: 6px 20px;
+    font-size: 11px;
+    font-family: monospace;
+    color: #888;
+    background: #fafafa;
+    border-bottom: 1px solid #eee;
+    display: none;
+}
+
+.status-bar:not(:empty) {
+    display: block;
+}
+
+.status-bar.recovered {
+    color: #2e7d32;
+    background: #e8f5e9;
+}
+
+.status-bar.streaming {
+    color: #1565c0;
+    background: #e3f2fd;
+}
+
+.status-bar.recovering {
+    color: #e65100;
+    background: #fff3e0;
+}
+
+.status-bar.recovering::before {
+    content: "";
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    border: 2px solid #e65100;
+    border-top-color: transparent;
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+    margin-right: 8px;
+    vertical-align: middle;
+}
+
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}
+
 .messages {
     flex: 1;
     overflow-y: auto;
@@ -125,22 +171,3 @@ body {
     cursor: not-allowed;
 }
 
-.toast {
-    position: fixed;
-    top: 20px;
-    left: 50%;
-    transform: translateX(-50%);
-    background: #333;
-    color: white;
-    padding: 10px 20px;
-    border-radius: 6px;
-    font-size: 13px;
-    opacity: 0;
-    transition: opacity 0.3s;
-    z-index: 1000;
-    pointer-events: none;
-}
-
-.toast.visible {
-    opacity: 1;
-}

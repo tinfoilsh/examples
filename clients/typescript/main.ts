@@ -37,6 +37,7 @@ function clearAll(): void {
   localStorage.removeItem(RECOVERY_STORAGE_KEY);
   conversation = [];
   messages.innerHTML = "";
+  clearStatus();
 }
 
 interface StoredRecovery {
@@ -91,24 +92,21 @@ function requireElement<T extends Element>(selector: string): T {
   return element;
 }
 
-const TOAST_DISPLAY_MS = 3000;
-
-function showToast(text: string): void {
-  const el = document.createElement("div");
-  el.className = "toast";
-  el.textContent = text;
-  document.body.appendChild(el);
-  requestAnimationFrame(() => el.classList.add("visible"));
-  setTimeout(() => {
-    el.classList.remove("visible");
-    el.addEventListener("transitionend", () => el.remove());
-  }, TOAST_DISPLAY_MS);
-}
-
 const messages = requireElement<HTMLDivElement>("#messages");
 const input = requireElement<HTMLInputElement>("#messageInput");
 const sendButton = requireElement<HTMLButtonElement>("#sendBtn");
 const clearButton = requireElement<HTMLButtonElement>("#clearBtn");
+const statusBar = requireElement<HTMLDivElement>("#statusBar");
+
+function setStatus(text: string, style: "streaming" | "recovered" | ""): void {
+  statusBar.textContent = text;
+  statusBar.className = "status-bar" + (style ? ` ${style}` : "");
+}
+
+function clearStatus(): void {
+  statusBar.textContent = "";
+  statusBar.className = "status-bar";
+}
 
 const client = new SecureClient({
   baseURL: "http://localhost:8080/",
@@ -245,6 +243,7 @@ async function sendMessage(): Promise<void> {
     }
 
     const sessionId = generateSessionId();
+    setStatus(`session: ${sessionId}`, "streaming");
 
     const response = await client.fetch("/v1/chat/completions", {
       method: "POST",
@@ -295,12 +294,14 @@ async function sendMessage(): Promise<void> {
     conversation.push({ role: "assistant", content: assistantText });
     saveConversation();
     clearRecovery();
+    clearStatus();
     fetch(`${PROXY_ORIGIN}/recovery/${sessionId}`, { method: "DELETE" }).catch(() => {});
   } catch (error) {
     console.error("Chat request failed", error);
     const message =
       error instanceof Error ? error.message : "Could not connect to server";
     appendMessage(`Error: ${message}`, "assistant");
+    clearStatus();
   } finally {
     sendButton.disabled = false;
     input.focus();
@@ -330,6 +331,7 @@ async function attemptRecovery(): Promise<void> {
   if (!stored) return;
 
   const { sessionId, exportedSecret, requestEnc, userMessage } = stored;
+  setStatus(`recovering session: ${sessionId}`, "recovering");
 
   try {
     // Fetch the buffered response directly — the proxy streams bytes as
@@ -373,11 +375,13 @@ async function attemptRecovery(): Promise<void> {
 
     conversation.push({ role: "assistant", content: assistantText });
     saveConversation();
-    showToast("Recovered from previous session");
+    setStatus(`recovered session: ${sessionId}`, "recovered");
     clearRecovery();
     fetch(`${PROXY_ORIGIN}/recovery/${sessionId}`, { method: "DELETE" }).catch(() => {});
   } catch (err) {
     console.warn("Session recovery failed:", err);
+    setStatus(`recovery failed: ${sessionId}`, "");
+    clearRecovery();
   }
 }
 
