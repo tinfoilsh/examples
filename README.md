@@ -95,7 +95,7 @@ Client                    Proxy                     Tinfoil Enclave
   │                         │ Body: <encrypted stream>     │
   │                         │                              │
   │ (save recovery token    │     Write to client          │
-  │  to localStorage)     │     + session buffer         │
+  │  to localStorage)       │     + session buffer         │
   │<─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ │                              │
   │                         │                              │
   │ (tab closes!)           │                              │
