@@ -4,7 +4,7 @@ import type { SessionRecoveryToken } from "tinfoil";
 type Role = "user" | "assistant";
 
 // ---------------------------------------------------------------------------
-// Session recovery: localStorage persistence
+// Session recovery: sessionStorage persistence
 // ---------------------------------------------------------------------------
 
 const PROXY_ORIGIN = "http://localhost:8080";
@@ -33,11 +33,11 @@ function saveRecovery(
     requestEnc: Array.from(token.requestEnc),
     userMessage,
   };
-  localStorage.setItem(RECOVERY_STORAGE_KEY, JSON.stringify(data));
+  sessionStorage.setItem(RECOVERY_STORAGE_KEY, JSON.stringify(data));
 }
 
 function loadRecovery(): StoredRecovery | null {
-  const raw = localStorage.getItem(RECOVERY_STORAGE_KEY);
+  const raw = sessionStorage.getItem(RECOVERY_STORAGE_KEY);
   if (!raw) return null;
   try {
     return JSON.parse(raw) as StoredRecovery;
@@ -47,7 +47,7 @@ function loadRecovery(): StoredRecovery | null {
 }
 
 function clearRecovery(): void {
-  localStorage.removeItem(RECOVERY_STORAGE_KEY);
+  sessionStorage.removeItem(RECOVERY_STORAGE_KEY);
 }
 
 // ---------------------------------------------------------------------------
@@ -229,7 +229,7 @@ async function sendMessage(): Promise<void> {
       }),
     });
 
-    // Save recovery token to localStorage before reading the stream.
+    // Save recovery token before reading the stream.
     // If the tab closes mid-stream, we can recover from the proxy buffer.
     try {
       const token = client.getSessionRecoveryToken();

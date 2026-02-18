@@ -10,7 +10,6 @@ import (
 	"os"
 	"strings"
 	"sync"
-	"time"
 )
 
 const (
@@ -22,8 +21,6 @@ const (
 	allowHeaders  = "Accept, Authorization, Content-Type, " + encapsulatedKeyHdr + ", " + enclaveURLHeader + ", " + sessionIDHeader
 	exposeHeaders = responseNonceHdr
 
-	sessionExpiryDuration = 5 * time.Minute
-	sessionCleanupTick    = 30 * time.Second
 )
 
 // ---------------------------------------------------------------------------
@@ -36,8 +33,7 @@ type session struct {
 	statusCode int
 	headers    http.Header
 	buf        bytes.Buffer
-	done       bool
-	createdAt  time.Time
+	done bool
 }
 
 type sessionStore struct {
@@ -49,8 +45,7 @@ var store = &sessionStore{sessions: make(map[string]*session)}
 
 func (s *sessionStore) create(id string) *session {
 	sess := &session{
-		headers:   make(http.Header),
-		createdAt: time.Now(),
+		headers: make(http.Header),
 	}
 	s.mu.Lock()
 	s.sessions[id] = sess
@@ -68,18 +63,6 @@ func (s *sessionStore) remove(id string) {
 	s.mu.Lock()
 	delete(s.sessions, id)
 	s.mu.Unlock()
-}
-
-func (s *sessionStore) cleanup() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	now := time.Now()
-	for id, sess := range s.sessions {
-		if now.Sub(sess.createdAt) > sessionExpiryDuration {
-			log.Printf("expiring session %s", id)
-			delete(s.sessions, id)
-		}
-	}
 }
 
 // resilientTeeWriter writes to both primary and fallible. If fallible
@@ -114,12 +97,6 @@ func (sw *sessionWriter) Write(p []byte) (int, error) {
 // ---------------------------------------------------------------------------
 
 func main() {
-	go func() {
-		for range time.Tick(sessionCleanupTick) {
-			store.cleanup()
-		}
-	}()
-
 	http.HandleFunc("/v1/chat/completions", proxyHandler)
 	http.HandleFunc("/v1/responses", proxyHandler)
 	http.HandleFunc("/attestation", attestationHandler)
