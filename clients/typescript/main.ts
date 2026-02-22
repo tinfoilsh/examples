@@ -5,44 +5,25 @@ import {
   deserializeSessionRecoveryToken,
   decryptResponseWithToken,
 } from "tinfoil";
+import { createParser } from "eventsource-parser";
 
 type Role = "user" | "assistant";
 
 // ---------------------------------------------------------------------------
-// Session recovery: localStorage persistence
+// Constants
 // ---------------------------------------------------------------------------
 
 const PROXY_ORIGIN = "http://localhost:8080";
 const RECOVERY_STORAGE_KEY = "tinfoil_recovery";
 const CONVERSATION_STORAGE_KEY = "tinfoil_conversation";
 
+// ---------------------------------------------------------------------------
+// State
+// ---------------------------------------------------------------------------
+
 interface ChatMessage {
   role: Role;
   content: string;
-}
-
-let conversation: ChatMessage[] = [];
-
-function saveConversation(): void {
-  localStorage.setItem(CONVERSATION_STORAGE_KEY, JSON.stringify(conversation));
-}
-
-function loadConversation(): ChatMessage[] {
-  const raw = localStorage.getItem(CONVERSATION_STORAGE_KEY);
-  if (!raw) return [];
-  try {
-    return JSON.parse(raw) as ChatMessage[];
-  } catch {
-    return [];
-  }
-}
-
-function clearAll(): void {
-  localStorage.removeItem(CONVERSATION_STORAGE_KEY);
-  localStorage.removeItem(RECOVERY_STORAGE_KEY);
-  conversation = [];
-  messages.innerHTML = "";
-  clearStatus();
 }
 
 interface StoredRecovery {
@@ -51,31 +32,10 @@ interface StoredRecovery {
   userMessage: string;
 }
 
-function generateSessionId(): string {
-  const bytes = crypto.getRandomValues(new Uint8Array(16));
-  return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
-}
-
-function saveRecovery(data: StoredRecovery): void {
-  localStorage.setItem(RECOVERY_STORAGE_KEY, JSON.stringify(data));
-}
-
-function loadRecovery(): StoredRecovery | null {
-  const raw = localStorage.getItem(RECOVERY_STORAGE_KEY);
-  if (!raw) return null;
-  try {
-    return JSON.parse(raw) as StoredRecovery;
-  } catch {
-    return null;
-  }
-}
-
-function clearRecovery(): void {
-  localStorage.removeItem(RECOVERY_STORAGE_KEY);
-}
+let conversation: ChatMessage[] = [];
 
 // ---------------------------------------------------------------------------
-// DOM helpers
+// DOM
 // ---------------------------------------------------------------------------
 
 function requireElement<T extends Element>(selector: string): T {
@@ -86,7 +46,7 @@ function requireElement<T extends Element>(selector: string): T {
   return element;
 }
 
-const messages = requireElement<HTMLDivElement>("#messages");
+const messagesDiv = requireElement<HTMLDivElement>("#messages");
 const input = requireElement<HTMLInputElement>("#messageInput");
 const sendButton = requireElement<HTMLButtonElement>("#sendBtn");
 const clearButton = requireElement<HTMLButtonElement>("#clearBtn");
@@ -102,10 +62,15 @@ function clearStatus(): void {
   statusBar.className = "status-bar";
 }
 
-const client = new SecureClient({
-  baseURL: "http://localhost:8080/",
-  attestationBundleURL: "http://localhost:8080",
-});
+let scrollQueued = false;
+function scrollToBottom(): void {
+  if (scrollQueued) return;
+  scrollQueued = true;
+  requestAnimationFrame(() => {
+    messagesDiv.scrollTop = messagesDiv.scrollHeight;
+    scrollQueued = false;
+  });
+}
 
 function appendMessage(text: string, role: Role): HTMLDivElement {
   const wrapper = document.createElement("div");
@@ -116,45 +81,24 @@ function appendMessage(text: string, role: Role): HTMLDivElement {
   bubble.textContent = text;
 
   wrapper.appendChild(bubble);
-  messages.appendChild(wrapper);
-  messages.scrollTop = messages.scrollHeight;
+  messagesDiv.appendChild(wrapper);
+  scrollToBottom();
 
   return bubble;
 }
 
 // ---------------------------------------------------------------------------
-// SSE stream parsing
+// Secure client
 // ---------------------------------------------------------------------------
 
-function processEvent(
-  payload: string,
-  onChunk: (text: string) => void,
-): boolean {
-  if (payload === "[DONE]") {
-    return true;
-  }
+const client = new SecureClient({
+  baseURL: "http://localhost:8080/",
+  attestationBundleURL: "http://localhost:8080",
+});
 
-  try {
-    const message = JSON.parse(payload);
-    const text =
-      message.choices?.[0]?.delta?.content ??
-      message.choices?.[0]?.message?.content ??
-      "";
-
-    if (text) {
-      onChunk(text);
-    }
-
-    if (message.error?.message) {
-      onChunk(`\nError: ${message.error.message}`);
-      return true;
-    }
-  } catch (error) {
-    console.warn("Could not parse SSE chunk", payload, error);
-  }
-
-  return false;
-}
+// ---------------------------------------------------------------------------
+// SSE stream consumption
+// ---------------------------------------------------------------------------
 
 async function streamResponse(
   response: Response,
@@ -165,45 +109,59 @@ async function streamResponse(
 
   const reader = body.getReader();
   const decoder = new TextDecoder();
-  let buffer = "";
   let finished = false;
 
-  const flush = (final = false) => {
-    const segments = buffer.split("\n\n");
-    buffer = final ? "" : (segments.pop() ?? "");
-
-    for (const segment of segments) {
-      const dataLines = segment
-        .split("\n")
-        .filter((line) => line.startsWith("data:"))
-        .map((line) => line.slice(5).trim());
-
-      if (dataLines.length === 0) {
-        continue;
-      }
-
-      const payload = dataLines.join("\n");
-      finished ||= processEvent(payload, onChunk);
-      if (finished) {
-        buffer = "";
+  const parser = createParser({
+    onEvent(event) {
+      if (event.data === "[DONE]") {
+        finished = true;
         return;
       }
-    }
-  };
+
+      try {
+        const message = JSON.parse(event.data);
+        const text =
+          message.choices?.[0]?.delta?.content ??
+          message.choices?.[0]?.message?.content ??
+          "";
+
+        if (text) {
+          onChunk(text);
+        }
+
+        if (message.error?.message) {
+          onChunk(`\nError: ${message.error.message}`);
+          finished = true;
+        }
+      } catch {
+        // skip unparseable events
+      }
+    },
+  });
 
   while (!finished) {
     const { value, done } = await reader.read();
     if (value) {
-      buffer += decoder.decode(value, { stream: true });
-      flush();
+      parser.feed(decoder.decode(value, { stream: true }));
     }
-    if (done) {
-      break;
-    }
+    if (done) break;
   }
 
-  buffer += decoder.decode();
-  flush(true);
+  parser.feed(decoder.decode());
+  parser.reset({ consume: true });
+}
+
+// ---------------------------------------------------------------------------
+// localStorage helpers
+// ---------------------------------------------------------------------------
+
+function generateSessionId(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+function deleteProxyBuffer(sessionId: string): void {
+  fetch(`${PROXY_ORIGIN}/recovery/${sessionId}`, { method: "DELETE" }).catch(() => {});
 }
 
 // ---------------------------------------------------------------------------
@@ -220,11 +178,12 @@ async function sendMessage(): Promise<void> {
   input.value = "";
 
   // Clean up any previous recovery session now that the user is sending a new message
-  const previousRecovery = loadRecovery();
+  const previousRecovery = localStorage.getItem(RECOVERY_STORAGE_KEY);
   if (previousRecovery) {
-    console.log("[recovery] cleaning up previous session:", previousRecovery.sessionId);
-    fetch(`${PROXY_ORIGIN}/recovery/${previousRecovery.sessionId}`, { method: "DELETE" }).catch(() => {});
-    clearRecovery();
+    const { sessionId } = JSON.parse(previousRecovery) as StoredRecovery;
+    console.log("[recovery] cleaning up previous session:", sessionId);
+    deleteProxyBuffer(sessionId);
+    localStorage.removeItem(RECOVERY_STORAGE_KEY);
   }
 
   conversation.push({ role: "user", content: text });
@@ -250,6 +209,8 @@ async function sendMessage(): Promise<void> {
       headers: {
         "Content-Type": "application/json",
         Accept: "text/event-stream",
+        // X-Session-Id is an application-level convention used by this proxy
+        // for stream recovery — not part of the tinfoil protocol.
         "X-Session-Id": sessionId,
       },
       body: JSON.stringify({
@@ -263,28 +224,32 @@ async function sendMessage(): Promise<void> {
     // If the tab closes mid-stream, we can recover from the proxy buffer.
     try {
       const token = await client.getSessionRecoveryToken();
-      saveRecovery({ sessionId, token: serializeSessionRecoveryToken(token), userMessage: text });
+      const stored: StoredRecovery = {
+        sessionId,
+        token: serializeSessionRecoveryToken(token),
+        userMessage: text,
+      };
+      localStorage.setItem(RECOVERY_STORAGE_KEY, JSON.stringify(stored));
       console.log("[recovery] token saved for session:", sessionId);
     } catch (err) {
       console.warn("[recovery] could not save token:", err);
     }
 
     if (!response.ok) {
-      clearRecovery();
+      localStorage.removeItem(RECOVERY_STORAGE_KEY);
       const errorText = await response.text();
       throw new Error(errorText || `HTTP ${response.status}`);
     }
 
     const assistantBubble = appendMessage("", "assistant");
-    const contentType = response.headers.get("Content-Type") ?? "";
-
     let assistantText = "";
 
+    const contentType = response.headers.get("Content-Type") ?? "";
     if (contentType.includes("text/event-stream")) {
       await streamResponse(response, (chunk) => {
         assistantText += chunk;
         assistantBubble.textContent = assistantText;
-        messages.scrollTop = messages.scrollHeight;
+        scrollToBottom();
       });
     } else {
       const json = await response.json();
@@ -293,11 +258,11 @@ async function sendMessage(): Promise<void> {
     }
 
     conversation.push({ role: "assistant", content: assistantText });
-    saveConversation();
-    clearRecovery();
+    localStorage.setItem(CONVERSATION_STORAGE_KEY, JSON.stringify(conversation));
+    localStorage.removeItem(RECOVERY_STORAGE_KEY);
     clearStatus();
     console.log("[session] stream complete, deleting recovery buffer:", sessionId);
-    fetch(`${PROXY_ORIGIN}/recovery/${sessionId}`, { method: "DELETE" }).catch(() => {});
+    deleteProxyBuffer(sessionId);
   } catch (error) {
     console.error("Chat request failed", error);
     const message =
@@ -311,7 +276,13 @@ async function sendMessage(): Promise<void> {
 }
 
 sendButton.addEventListener("click", () => void sendMessage());
-clearButton.addEventListener("click", clearAll);
+clearButton.addEventListener("click", () => {
+  localStorage.removeItem(CONVERSATION_STORAGE_KEY);
+  localStorage.removeItem(RECOVERY_STORAGE_KEY);
+  conversation = [];
+  messagesDiv.innerHTML = "";
+  clearStatus();
+});
 input.addEventListener("keydown", (event) => {
   if (event.key === "Enter" && !event.isComposing) {
     event.preventDefault();
@@ -323,15 +294,29 @@ input.addEventListener("keydown", (event) => {
 // Restore conversation and attempt session recovery on page load
 // ---------------------------------------------------------------------------
 
-conversation = loadConversation();
+const savedConversation = localStorage.getItem(CONVERSATION_STORAGE_KEY);
+if (savedConversation) {
+  try {
+    conversation = JSON.parse(savedConversation) as ChatMessage[];
+  } catch {
+    conversation = [];
+  }
+}
 for (const msg of conversation) {
   appendMessage(msg.content, msg.role);
 }
 
 async function attemptRecovery(): Promise<void> {
-  const stored = loadRecovery();
-  if (!stored) {
+  const raw = localStorage.getItem(RECOVERY_STORAGE_KEY);
+  if (!raw) {
     console.log("[recovery] no recovery token found, skipping");
+    return;
+  }
+
+  let stored: StoredRecovery;
+  try {
+    stored = JSON.parse(raw) as StoredRecovery;
+  } catch {
     return;
   }
 
@@ -345,7 +330,7 @@ async function attemptRecovery(): Promise<void> {
     const statusResp = await fetch(`${PROXY_ORIGIN}/recovery/${sessionId}/status`);
     if (!statusResp.ok) {
       console.warn("[recovery] status check failed:", statusResp.status);
-      clearRecovery();
+      localStorage.removeItem(RECOVERY_STORAGE_KEY);
       return;
     }
     const { bytes: bufferedBytes } = await statusResp.json();
@@ -353,12 +338,10 @@ async function attemptRecovery(): Promise<void> {
 
     // Fetch the buffered response, wrapping the body to track how many
     // raw bytes we've consumed so we can detect the replay/live boundary.
-    const recoveryResp = await fetch(
-      `${PROXY_ORIGIN}/recovery/${sessionId}`,
-    );
+    const recoveryResp = await fetch(`${PROXY_ORIGIN}/recovery/${sessionId}`);
     if (!recoveryResp.ok) {
       console.warn("[recovery] proxy returned", recoveryResp.status, "— session may have expired");
-      clearRecovery();
+      localStorage.removeItem(RECOVERY_STORAGE_KEY);
       return;
     }
 
@@ -396,14 +379,14 @@ async function attemptRecovery(): Promise<void> {
     conversation.push({ role: "user", content: userMessage });
     appendMessage(userMessage, "user");
     const assistantBubble = appendMessage("", "assistant");
-    const contentType = decrypted.headers.get("Content-Type") ?? "";
     let assistantText = "";
 
+    const contentType = decrypted.headers.get("Content-Type") ?? "";
     if (contentType.includes("text/event-stream")) {
       await streamResponse(decrypted, (chunk) => {
         assistantText += chunk;
         assistantBubble.textContent = assistantText;
-        messages.scrollTop = messages.scrollHeight;
+        scrollToBottom();
       });
     } else {
       const json = await decrypted.json();
@@ -413,10 +396,10 @@ async function attemptRecovery(): Promise<void> {
 
     console.log("[recovery] complete, recovered", assistantText.length, "chars");
     conversation.push({ role: "assistant", content: assistantText });
-    saveConversation();
-    clearRecovery();
+    localStorage.setItem(CONVERSATION_STORAGE_KEY, JSON.stringify(conversation));
+    localStorage.removeItem(RECOVERY_STORAGE_KEY);
     clearStatus();
-    fetch(`${PROXY_ORIGIN}/recovery/${sessionId}`, { method: "DELETE" }).catch(() => {});
+    deleteProxyBuffer(sessionId);
   } catch (err) {
     console.warn("[recovery] failed:", err);
     setStatus(`recovery failed: ${sessionId}`, "");
