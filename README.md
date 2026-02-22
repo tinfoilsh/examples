@@ -79,45 +79,4 @@ The client sends `DELETE /recovery/{id}` after a successful normal completion to
 
 ## Request Flow
 
-```
-Client                    Proxy                     Tinfoil Enclave
-  │                         │                              │
-  │ POST /v1/chat/completions                              │
-  │ X-Session-Id: abc123    │                              │
-  │────────────────────────>│                              │
-  │                         │ create session buffer abc123 │
-  │                         │                              │
-  │                         │ POST /v1/chat/completions    │
-  │                         │ Authorization: Bearer <key>  │
-  │                         │─────────────────────────────>│
-  │                         │<─────────────────────────────│
-  │                         │ Ehbp-Response-Nonce: <nonce> │
-  │                         │ Body: <encrypted stream>     │
-  │                         │                              │
-  │ (save recovery token    │     Write to client          │
-  │  to localStorage)       │     + session buffer         │
-  │<─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ │                              │
-  │                         │                              │
-  │ (tab closes!)           │                              │
-  │          X              │ client write fails,          │
-  │                         │ continue buffering           │
-  │                         │<─────────────────────────────│
-  │                         │ (stream completes)           │
-  │                         │ session.done = true          │
-  │                         │                              │
-  │ (user reopens tab)      │                              │
-  │                         │                              │
-  │ GET /recovery/abc123/status                            │
-  │────────────────────────>│                              │
-  │<────────────────────────│ {"status":"complete"}        │
-  │                         │                              │
-  │ GET /recovery/abc123    │                              │
-  │────────────────────────>│                              │
-  │<────────────────────────│ buffered encrypted response  │
-  │                         │                              │
-  │ (decrypt with saved     │                              │
-  │  recovery token)        │                              │
-  │                         │                              │
-  │ (render recovered       │                              │
-  │  conversation)          │                              │
-```
+![Request Flow](flow-diagram.jpeg)
