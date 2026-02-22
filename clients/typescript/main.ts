@@ -1,6 +1,5 @@
 import {
   SecureClient,
-  FetchError,
   AttestationError,
   serializeSessionRecoveryToken,
   deserializeSessionRecoveryToken,
@@ -236,14 +235,10 @@ async function sendMessage(): Promise<void> {
     try {
       await client.ready();
     } catch (err) {
-      if (err instanceof FetchError) {
-        await client.ready();
-      } else if (err instanceof AttestationError) {
+      if (err instanceof AttestationError) {
         client.reset();
-        await client.ready();
-      } else {
-        throw err;
       }
+      await client.ready();
     }
 
     const sessionId = generateSessionId();
