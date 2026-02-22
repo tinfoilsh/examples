@@ -340,9 +340,19 @@ async function attemptRecovery(): Promise<void> {
   setStatus(`recovering session: ${sessionId}`, "recovering");
 
   try {
-    // Fetch the buffered response directly — the proxy streams bytes as
-    // they arrive, so this works whether the upstream is still in progress
-    // or already complete.
+    // Check how many bytes the proxy has buffered so we know when we've
+    // caught up to the live stream.
+    const statusResp = await fetch(`${PROXY_ORIGIN}/recovery/${sessionId}/status`);
+    if (!statusResp.ok) {
+      console.warn("[recovery] status check failed:", statusResp.status);
+      clearRecovery();
+      return;
+    }
+    const { bytes: bufferedBytes } = await statusResp.json();
+    console.log("[recovery] proxy has", bufferedBytes, "bytes buffered");
+
+    // Fetch the buffered response, wrapping the body to track how many
+    // raw bytes we've consumed so we can detect the replay/live boundary.
     const recoveryResp = await fetch(
       `${PROXY_ORIGIN}/recovery/${sessionId}`,
     );
@@ -352,11 +362,36 @@ async function attemptRecovery(): Promise<void> {
       return;
     }
 
-    console.log("[recovery] got buffered response, decrypting...");
-    setStatus(`recovered session: ${sessionId}`, "recovered");
+    let bytesRead = 0;
+    let caughtUp = false;
+    const originalBody = recoveryResp.body!;
+    const countingStream = new ReadableStream({
+      async start(controller) {
+        const reader = originalBody.getReader();
+        for (;;) {
+          const { value, done } = await reader.read();
+          if (done) {
+            controller.close();
+            return;
+          }
+          bytesRead += value.byteLength;
+          if (!caughtUp && bytesRead >= bufferedBytes) {
+            caughtUp = true;
+            console.log("[recovery] caught up to live stream at", bytesRead, "bytes");
+            setStatus(`recovered session: ${sessionId}`, "recovered");
+          }
+          controller.enqueue(value);
+        }
+      },
+    });
+    const wrappedResp = new Response(countingStream, {
+      headers: recoveryResp.headers,
+      status: recoveryResp.status,
+    });
 
+    console.log("[recovery] decrypting...");
     const token = deserializeSessionRecoveryToken(serializedToken);
-    const decrypted = await decryptResponseWithToken(recoveryResp, token);
+    const decrypted = await decryptResponseWithToken(wrappedResp, token);
 
     conversation.push({ role: "user", content: userMessage });
     appendMessage(userMessage, "user");
@@ -376,9 +411,12 @@ async function attemptRecovery(): Promise<void> {
       assistantBubble.textContent = assistantText;
     }
 
-    console.log("[recovery] success, recovered", assistantText.length, "chars");
+    console.log("[recovery] complete, recovered", assistantText.length, "chars");
     conversation.push({ role: "assistant", content: assistantText });
     saveConversation();
+    clearRecovery();
+    clearStatus();
+    fetch(`${PROXY_ORIGIN}/recovery/${sessionId}`, { method: "DELETE" }).catch(() => {});
   } catch (err) {
     console.warn("[recovery] failed:", err);
     setStatus(`recovery failed: ${sessionId}`, "");
