@@ -1,5 +1,11 @@
-import { SecureClient, FetchError, AttestationError } from "tinfoil";
-import type { SessionRecoveryToken } from "tinfoil";
+import {
+  SecureClient,
+  FetchError,
+  AttestationError,
+  serializeSessionRecoveryToken,
+  deserializeSessionRecoveryToken,
+  decryptResponseWithToken,
+} from "tinfoil";
 
 type Role = "user" | "assistant";
 
@@ -42,8 +48,7 @@ function clearAll(): void {
 
 interface StoredRecovery {
   sessionId: string;
-  exportedSecret: number[];
-  requestEnc: number[];
+  token: string;
   userMessage: string;
 }
 
@@ -52,17 +57,7 @@ function generateSessionId(): string {
   return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-function saveRecovery(
-  sessionId: string,
-  token: SessionRecoveryToken,
-  userMessage: string,
-): void {
-  const data: StoredRecovery = {
-    sessionId,
-    exportedSecret: Array.from(token.exportedSecret),
-    requestEnc: Array.from(token.requestEnc),
-    userMessage,
-  };
+function saveRecovery(data: StoredRecovery): void {
   localStorage.setItem(RECOVERY_STORAGE_KEY, JSON.stringify(data));
 }
 
@@ -228,6 +223,7 @@ async function sendMessage(): Promise<void> {
   // Clean up any previous recovery session now that the user is sending a new message
   const previousRecovery = loadRecovery();
   if (previousRecovery) {
+    console.log("[recovery] cleaning up previous session:", previousRecovery.sessionId);
     fetch(`${PROXY_ORIGIN}/recovery/${previousRecovery.sessionId}`, { method: "DELETE" }).catch(() => {});
     clearRecovery();
   }
@@ -251,6 +247,7 @@ async function sendMessage(): Promise<void> {
     }
 
     const sessionId = generateSessionId();
+    console.log("[session] created:", sessionId);
     setStatus(`session: ${sessionId}`, "streaming");
 
     const response = await client.fetch("/v1/chat/completions", {
@@ -270,10 +267,11 @@ async function sendMessage(): Promise<void> {
     // Save recovery token before reading the stream.
     // If the tab closes mid-stream, we can recover from the proxy buffer.
     try {
-      const token = client.getSessionRecoveryToken();
-      saveRecovery(sessionId, token, text);
-    } catch {
-      // Token not available (e.g. bodyless request)
+      const token = await client.getSessionRecoveryToken();
+      saveRecovery({ sessionId, token: serializeSessionRecoveryToken(token), userMessage: text });
+      console.log("[recovery] token saved for session:", sessionId);
+    } catch (err) {
+      console.warn("[recovery] could not save token:", err);
     }
 
     if (!response.ok) {
@@ -303,6 +301,7 @@ async function sendMessage(): Promise<void> {
     saveConversation();
     clearRecovery();
     clearStatus();
+    console.log("[session] stream complete, deleting recovery buffer:", sessionId);
     fetch(`${PROXY_ORIGIN}/recovery/${sessionId}`, { method: "DELETE" }).catch(() => {});
   } catch (error) {
     console.error("Chat request failed", error);
@@ -336,9 +335,13 @@ for (const msg of conversation) {
 
 async function attemptRecovery(): Promise<void> {
   const stored = loadRecovery();
-  if (!stored) return;
+  if (!stored) {
+    console.log("[recovery] no recovery token found, skipping");
+    return;
+  }
 
-  const { sessionId, exportedSecret, requestEnc, userMessage } = stored;
+  const { sessionId, token: serializedToken, userMessage } = stored;
+  console.log("[recovery] attempting recovery for session:", sessionId);
   setStatus(`recovering session: ${sessionId}`, "recovering");
 
   try {
@@ -349,21 +352,16 @@ async function attemptRecovery(): Promise<void> {
       `${PROXY_ORIGIN}/recovery/${sessionId}`,
     );
     if (!recoveryResp.ok) {
+      console.warn("[recovery] proxy returned", recoveryResp.status, "— session may have expired");
       clearRecovery();
       return;
     }
 
+    console.log("[recovery] got buffered response, decrypting...");
     setStatus(`recovered session: ${sessionId}`, "recovered");
 
-    const token: SessionRecoveryToken = {
-      exportedSecret: new Uint8Array(exportedSecret),
-      requestEnc: new Uint8Array(requestEnc),
-    };
-
-    const decrypted = await SecureClient.decryptRecoveryResponse(
-      recoveryResp,
-      token,
-    );
+    const token = deserializeSessionRecoveryToken(serializedToken);
+    const decrypted = await decryptResponseWithToken(recoveryResp, token);
 
     conversation.push({ role: "user", content: userMessage });
     appendMessage(userMessage, "user");
@@ -383,10 +381,11 @@ async function attemptRecovery(): Promise<void> {
       assistantBubble.textContent = assistantText;
     }
 
+    console.log("[recovery] success, recovered", assistantText.length, "chars");
     conversation.push({ role: "assistant", content: assistantText });
     saveConversation();
   } catch (err) {
-    console.warn("Session recovery failed:", err);
+    console.warn("[recovery] failed:", err);
     setStatus(`recovery failed: ${sessionId}`, "");
   }
 }
