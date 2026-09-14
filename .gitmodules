@@ -1,0 +1,6 @@
+[submodule "confidential-secret-storage"]
+	path = example-secret-storage/confidential-secret-storage
+	url = https://github.com/tinfoilsh/confidential-secret-storage.git
+[submodule "confidential-debug-secret-consumer"]
+	path = example-secret-storage/confidential-debug-secret-consumer
+	url = https://github.com/tinfoilsh/confidential-debug-secret-consumer.git

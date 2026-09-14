@@ -4,7 +4,7 @@
 
 This example demonstrates **session recovery** for encrypted AI streaming responses. If a user closes their browser tab while a response is streaming, the proxy continues buffering the encrypted response. When the user reopens the page, the client retrieves and decrypts the buffered response.
 
-This builds on the basic encrypted request proxy pattern shown in [encrypted-request-proxy-example](https://github.com/tinfoilsh/encrypted-request-proxy-example) and described in [our docs](https://docs.tinfoil.sh/guides/proxy-server). 
+This builds on the basic encrypted request proxy pattern shown in [encrypted-request-proxy-example](../encrypted-request-proxy-example) and described in [our docs](https://docs.tinfoil.sh/guides/proxy-server).
 
 ## Project Structure
 

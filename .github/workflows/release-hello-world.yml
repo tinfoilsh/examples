@@ -7,9 +7,9 @@
 # This repo is an image producer — it does not ship its own enclave config.
 # To deploy the published image inside an enclave, use tinfoil-containers-template.
 
-name: Tinfoil Release
+name: Release Hello World
 
-run-name: Release ${{ inputs.version }}
+run-name: Release hello-world ${{ inputs.version }}
 
 on:
   workflow_dispatch:
@@ -21,6 +21,11 @@ on:
 
 concurrency:
   group: tinfoil-containers-hello-world-release-${{ inputs.version }}
+
+env:
+  EXAMPLE_DIRECTORY: tinfoil-containers-hello-world
+  IMAGE_NAME: ghcr.io/${{ github.repository }}/hello-world
+  RELEASE_TAG: hello-world/${{ inputs.version }}
 
 jobs:
   build:
@@ -38,11 +43,9 @@ jobs:
           persist-credentials: false
 
       - name: Check if version tag already exists
-        env:
-          VERSION: ${{ inputs.version }}
         run: |
-          if git ls-remote --tags origin "refs/tags/$VERSION" | grep -q .; then
-            echo "::error::Tag $VERSION already exists"
+          if git ls-remote --tags origin "refs/tags/$RELEASE_TAG" | grep -q .; then
+            echo "::error::Tag $RELEASE_TAG already exists"
             exit 1
           fi
 
@@ -60,7 +63,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@030e881283bb7a6894de51c315a6bfe6a94e05cf # v6.0.0
         with:
-          images: ghcr.io/${{ github.repository }}
+          images: ${{ env.IMAGE_NAME }}
           tags: |
             type=semver,pattern={{version}},value=${{ inputs.version }}
             type=semver,pattern={{major}}.{{minor}},value=${{ inputs.version }}
@@ -72,7 +75,7 @@ jobs:
         env:
           SOURCE_DATE_EPOCH: 0
         with:
-          context: .
+          context: ${{ env.EXAMPLE_DIRECTORY }}
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
@@ -88,21 +91,19 @@ jobs:
         uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
 
       - name: Create release tag
-        env:
-          VERSION: ${{ inputs.version }}
         run: |
-          git tag "$VERSION"
-          git push origin "$VERSION"
+          git tag "$RELEASE_TAG"
+          git push origin "$RELEASE_TAG"
 
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ inputs.version }}
           DIGEST: ${{ needs.build.outputs.digest }}
-          IMAGE: ghcr.io/${{ github.repository }}
+          IMAGE: ${{ env.IMAGE_NAME }}
         run: |
-          gh release create "$VERSION" \
-            --title "$VERSION" \
+          gh release create "$RELEASE_TAG" \
+            --title "hello-world $VERSION" \
             --verify-tag \
             --generate-notes \
             --notes "Image: \`$IMAGE@$DIGEST\`"

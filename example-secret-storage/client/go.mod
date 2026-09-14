@@ -1,4 +1,4 @@
-module github.com/tinfoilsh/example_aggregated_storage/client
+module github.com/tinfoilsh/examples/example-secret-storage/client
 
 go 1.25.5
 
