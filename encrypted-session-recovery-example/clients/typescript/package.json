@@ -1,0 +1,9 @@
+{
+  "devDependencies": {
+    "vite": "^7.1.9"
+  },
+  "dependencies": {
+    "eventsource-parser": "^3.0.6",
+    "tinfoil": "^1.1.2"
+  }
+}
