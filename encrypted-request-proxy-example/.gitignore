@@ -1,0 +1,5 @@
+node_modules
+.env
+.vite
+dist
+clients/swift/.build
