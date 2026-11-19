@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
@@ -11,7 +12,7 @@ import (
 	"net/http"
 	"os"
 
-	"github.com/tinfoilsh/tinfoil-go/verifier/client"
+	"github.com/tinfoilsh/tinfoil-go"
 )
 
 func main() {
@@ -30,11 +31,11 @@ func main() {
 
 	// Attest the storage enclave before sending any data.
 	fmt.Printf("Attesting storage enclave %s (%s)...\n", storageHost, storageRepo)
-	sc := client.NewSecureClient(storageHost, storageRepo)
-	httpClient, err := sc.HTTPClient()
+	enclaveClient, err := tinfoil.NewEnclaveHTTPClient(context.Background(), storageHost, tinfoil.Pin{Repo: storageRepo}, nil)
 	if err != nil {
 		log.Fatalf("attestation failed: %v", err)
 	}
+	httpClient := enclaveClient.Client
 	fmt.Println("  Attested.")
 
 	baseURL := "https://" + storageHost

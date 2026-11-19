@@ -1,10 +1,11 @@
 import {
-  SecureClient,
-  AttestationError,
+  RouterHTTPClient,
+  NetworkError,
+  sessionRecoveryToken,
   serializeSessionRecoveryToken,
   deserializeSessionRecoveryToken,
   decryptResponseWithToken,
-} from "tinfoil";
+} from "tinfoil/http";
 import { createParser } from "eventsource-parser";
 
 type Role = "user" | "assistant";
@@ -91,10 +92,17 @@ function appendMessage(text: string, role: Role): HTMLDivElement {
 // Secure client
 // ---------------------------------------------------------------------------
 
-const client = new SecureClient({
-  baseURL: "http://localhost:8080/",
-  attestationBundleURL: "http://localhost:8080",
-});
+let clientPromise: Promise<RouterHTTPClient> | undefined;
+
+function getClient(): Promise<RouterHTTPClient> {
+  clientPromise ??= RouterHTTPClient.create({
+    baseURL: "http://localhost:8080/",
+  }).catch((err) => {
+    clientPromise = undefined;
+    throw err;
+  });
+  return clientPromise;
+}
 
 // ---------------------------------------------------------------------------
 // SSE stream consumption
@@ -191,20 +199,21 @@ async function sendMessage(): Promise<void> {
   sendButton.disabled = true;
 
   try {
+    let client: RouterHTTPClient;
     try {
-      await client.ready();
+      client = await getClient();
     } catch (err) {
-      if (err instanceof AttestationError) {
-        client.reset();
+      if (!(err instanceof NetworkError)) {
+        throw err;
       }
-      await client.ready();
+      client = await getClient();
     }
 
     const sessionId = generateSessionId();
     console.log("[session] created:", sessionId);
     setStatus(`session: ${sessionId}`, "streaming");
 
-    const response = await client.fetch("/v1/chat/completions", {
+    const response = await client.fetch(new URL("v1/chat/completions", client.baseURL), {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -223,7 +232,7 @@ async function sendMessage(): Promise<void> {
     // Save recovery token before reading the stream.
     // If the tab closes mid-stream, we can recover from the proxy buffer.
     try {
-      const token = await client.getSessionRecoveryToken();
+      const token = await sessionRecoveryToken(response);
       const stored: StoredRecovery = {
         sessionId,
         token: serializeSessionRecoveryToken(token),

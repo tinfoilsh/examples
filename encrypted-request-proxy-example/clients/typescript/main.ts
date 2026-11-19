@@ -1,4 +1,4 @@
-import { SecureClient, TinfoilError, AttestationError } from "tinfoil";
+import { RouterHTTPClient, NetworkError } from "tinfoil/http";
 
 type Role = "user" | "assistant";
 
@@ -16,13 +16,19 @@ const sendButton = requireElement<HTMLButtonElement>("#sendBtn");
 
 // Configure the client to connect to your proxy server
 // baseURL: Your proxy server that adds authentication and custom logic
-// attestationBundleURL: Route attestation requests through the proxy too
-// The SDK fetches enclave config from the attestation bundle
+// The SDK discovers the enclave and verifies its attestation directly
 // The enclave URL is sent to the proxy via the X-Tinfoil-Enclave-Url header
-const client = new SecureClient({
-  baseURL: "http://localhost:8080/",
-  attestationBundleURL: "http://localhost:8080",
-});
+let clientPromise: Promise<RouterHTTPClient> | undefined;
+
+function getClient(): Promise<RouterHTTPClient> {
+  clientPromise ??= RouterHTTPClient.create({
+    baseURL: "http://localhost:8080/",
+  }).catch((err) => {
+    clientPromise = undefined;
+    throw err;
+  });
+  return clientPromise;
+}
 
 function appendMessage(text: string, role: Role): HTMLDivElement {
   const wrapper = document.createElement("div");
@@ -131,17 +137,16 @@ async function sendMessage(): Promise<void> {
   sendButton.disabled = true;
 
   try {
-    // Wait for the client to complete attestation verification.
-    // TinfoilError: transient network issue -- just call ready() again to retry.
-    // AttestationError: security issue -- call reset() to get a fresh bundle and re-verify.
+    // The client is returned only after attestation verification succeeds,
+    // and it verifies again by itself when the verification expires.
+    // NetworkError: transient network issue -- create the client again to retry.
+    // AttestationError: security issue -- the enclave could not be trusted.
+    let client: RouterHTTPClient;
     try {
-      await client.ready();
+      client = await getClient();
     } catch (err) {
-      if (err instanceof TinfoilError) {
-        await client.ready();
-      } else if (err instanceof AttestationError) {
-        client.reset();
-        await client.ready();
+      if (err instanceof NetworkError) {
+        client = await getClient();
       } else {
         throw err;
       }
@@ -153,7 +158,7 @@ async function sendMessage(): Promise<void> {
       stream: true,
     });
 
-    const response = await client.fetch("/v1/chat/completions", {
+    const response = await client.fetch(new URL("v1/chat/completions", client.baseURL), {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
