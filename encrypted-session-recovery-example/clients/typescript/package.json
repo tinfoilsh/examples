@@ -4,6 +4,6 @@
   },
   "dependencies": {
     "eventsource-parser": "^3.0.6",
-    "tinfoil": "^1.1.2"
+    "tinfoil": "2.0.0-rc.4"
   }
 }
